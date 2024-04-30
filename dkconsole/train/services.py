@@ -9,6 +9,7 @@ import requests
 from django.conf import settings
 from requests_toolbelt.multipart.encoder import MultipartEncoder
 from rest_framework import status
+from django.core.files.storage import FileSystemStorage
 
 # DI
 from dkconsole.service_factory import factory
@@ -24,8 +25,9 @@ class TrainService():
     refresh_lock = False
     MODEL_DIR = settings.MODEL_DIR
     MOVIE_DIR = settings.MOVIE_DIR
+    DATA_DIR  = settings.DATA_DIR
     REFRESH_JOB_STATUS_URL = f'{settings.HQ_BASE_URL}/train/refresh_job_statuses'
-    SUBMIT_JOB_URL = f'{settings.HQ_BASE_URL}/train/submit_job'
+    SUBMIT_JOB_URL = f'{settings.HQ_BASE_URL}/train/submit_job_handler'
 
     vehicle_service = factory.create('vehicle_service')
     tub_service = factory.create('tub_service')
@@ -57,8 +59,14 @@ class TrainService():
         return meta['uuid']
 
     @classmethod
-    def submit_job(cls, tub_paths, id_token=None):
-        job = cls.create_job(tub_paths)
+    def submit_job(cls, tub_paths, id_token=None, newjob):
+        job = newjob
+        if not newjob:
+          job = cls.create_job(tub_paths)
+
+        job_id = job.uuid
+        if not job_id:
+              job_id=""
 
         filename = cls.tub_service.generate_tub_archive(tub_paths)
 
@@ -67,31 +75,39 @@ class TrainService():
                 'device_id': cls.vehicle_service.get_wlan_mac_address() or "Null",
                 'hostname': cls.vehicle_service.get_hostname(),
                 'tub_archive_file': ('file.tar.gz', open(filename, 'rb'), 'application/gzip'),
-                'donkeycar_version': str(vehicle_service.get_donkeycar_version())
+                'donkeycar_version': str(vehicle_service.get_donkeycar_version()
+                'job_id':job_id)
             }
         )
-        logger.debug("Posting job to HQ")
-        r = requests.post(
-            cls.SUBMIT_JOB_URL,
-            data=mp_encoder,  # The MultipartEncoder is posted as data, don't use files=...!
-            # The MultipartEncoder provides the content-type header with the boundary:
-            headers={'Content-Type': mp_encoder.content_type, 'Authorization': id_token if id_token else ''},
-        )
+        print(cls.SUBMIT_JOB_URL)
+        logger.debug("Posting job to HQ", cls.SUBMIT_JOB_URL)
 
-        if r.status_code == status.HTTP_200_OK:
-            if "job_uuid" in r.json():
-                try:
-                    print(r.json()['job_uuid'])
-                    uuid.UUID(r.json()['job_uuid'], version=4)
-                    job.uuid = r.json()['job_uuid']
-                    job.save()
-                except Exception as e:
-                    print(e)
-                    raise Exception("Failed to call submit job")
-            else:
-                raise Exception("Failed to call submit job")
-        else:
-            raise Exception(f"Failed to call submit job, ERROR {r.status_code}")
+        try:
+
+          r = requests.post(
+              cls.SUBMIT_JOB_URL,
+              data=mp_encoder,  # The MultipartEncoder is posted as data, don't use files=...!
+              # The MultipartEncoder provides the content-type header with the boundary:
+              headers={'Content-Type': mp_encoder.content_type, 'Authorization': id_token if id_token else ''},
+          )
+
+          if r.status_code == status.HTTP_200_OK:
+              if "job_uuid" in r.json():
+                  try:
+                      print(r.json()['job_uuid'])
+                      uuid.UUID(r.json()['job_uuid'], version=4)
+                      job.uuid = r.json()['job_uuid']
+                      job.save()
+                  except Exception as e:
+                      print(e)
+                      raise Exception("Failed to call submit job")
+              else:
+                  raise Exception("Failed to call submit job")
+          else:
+              raise Exception(f"Failed to call submit job, ERROR {r.status_code}")
+        except Exception as e:
+            logger.error(e)
+            raise Exception("Failed to call submit job")
 
     @classmethod
     def submit_job_v2(cls, tub_paths, id_token=None):
@@ -113,7 +129,7 @@ class TrainService():
                 fields=data
             )
 
-            logger.debug("Posting job to HQ")
+            logger.debug("Posting job to HQ with submit job v2")
             r = requests.post(
                 cls.SUBMIT_JOB_URL,
                 data=mp_encoder,  # The MultipartEncoder is posted as data, don't use files=...!
@@ -126,13 +142,16 @@ class TrainService():
                     uuid.UUID(r.json()['job_uuid'], version=4)
                     job.uuid = r.json()['job_uuid']
                     job.save()
+
+                    cls.submit_job(tub_paths, id_token=id_token, job.uuid)
+
                 else:
-                    raise Exception("Failed to call submit job")
+                    raise Exception("Failed to call submit job v2")
             else:
-                raise Exception("Failed to call submit job")
+                raise Exception("Failed to call submit job v2")
         except Exception as e:
             logger.error(e)
-            raise Exception("Failed to call submit job")
+            raise Exception("Failed to call submit job v2")
 
     # @classmethod
     # def refresh_all_job_status(cls):
@@ -155,7 +174,10 @@ class TrainService():
                     for result in updated_jobs:
                         if ("uuid" in result):
                             job = Job.objects.get(uuid=result['uuid'])
+                            for j in Job.objects.all():
+                                print(str(j.uuid) + ":"+ j.status)
                             job.status = result['status']
+                            print("result[status]:" + job.status)
                             job.model_url = result['model_url']
                             job.model_accuracy_url = result['model_accuracy_url']
                             job.model_movie_url = result['model_movie_url']
@@ -170,11 +192,14 @@ class TrainService():
 
     @classmethod
     def download_model(cls, job):
-        print(type(cls.MODEL_DIR))
+        print("download_model:"+cls.MODEL_DIR)
         if vehicle_service.get_donkeycar_version().major == 4:
+            print("download .h5")
             cls.download_file(job.model_url, f"{cls.MODEL_DIR}/job_{job.id}.h5")
         elif vehicle_service.get_donkeycar_version().major == 5:
+            print("download and unzip")
             def download_and_unzip_savedmodel(url, filepath, jobid):
+                print(url)
                 os.system(" ".join(["curl", "--fail", url, "--output", filepath]))
                 if os.path.exists(f"{cls.MODEL_DIR}/.job_{jobid}.savedmodel.temp"):
                     shutil.rmtree(f"{cls.MODEL_DIR}/.job_{jobid}.savedmodel.temp")
@@ -231,3 +256,43 @@ class TrainService():
             return model_movie_path
         else:
             return None
+
+    @classmethod
+    def save_for_training(cls, myfile, device_id, hostname, job_id):
+        fs = FileSystemStorage()
+        filename = fs.save(myfile.name, myfile)
+        uploaded_file_url = fs.url(filename)
+        print(uploaded_file_url)
+
+        statusfilename = fs.save(job_id+".json", {"device_id":device_id, "hostname":hostname, "uuid": job_id, "status": JobStatus.SCHEDULED, "model_url": "some-url", "model_accuracy_url": "some-url", "model_movie_url":"movie-url"})
+        print(statusfilename)
+        return filename
+
+    @classmethod
+    def extract_for_training(cls, filepath, jpbid):
+      def extract_data(filepath):
+          print(filepath)
+          os.system(f"tar -xzf {filepath} -C {cls.DATA_DIR} -k")
+      multiprocessing.Process(target=extract_data, args=(filepath)).start()
+
+    # @classmethod
+    # def get_train_uuid(cls, device_id, hostname):
+    #     return job_uuid
+
+    @classmethod
+    def get_train_uuid(cls, job_id):
+        if os.path.exists(job_id+".json"):
+            with open(job_id+".json", 'rb') as fh:
+                status = json.load(fh)
+                return [status]
+        else:
+            return [{"uuid": job_id, "status": JobStatus.SCHEDULED}]
+
+    @classmethod
+    def get_statuses(cls, job_id):
+        if os.path.exists(job_id+".json"):
+            with open(job_id+".json", 'rb') as fh:
+                status = json.load(fh)
+                return [status]
+        else:
+            return [{"uuid": job_id, "status": JobStatus.SCHEDULED}]

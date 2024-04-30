@@ -1,0 +1,61 @@
+#
+# training server
+#
+#    QueryDict: {'device_id': ['3c:22:fb:5b:9c:3a'], 'hostname': ['kwiksher.local'], 'donkeycar_version': ['4.5.0'], 'tub_uuids': ['75f793fa-a391-4aa7-a2da-bd02bb2695b7'], 'myconfig_file': [<InMemoryUploadedFile: myconfig.py (text/plain)>]}>
+
+POST https://localhost:8001/train/submit_job_handler
+Content-Type: multipart/form-data; boundary=WebKitFormBoundary
+
+--WebKitFormBoundary
+Content-Disposition: form-data; name="deice_id"
+
+invoice_text
+--WebKitFormBoundary
+Content-Disposition: form-data; name="hostname"
+
+invoice_text
+--WebKitFormBoundary
+Content-Disposition: form-data; name="donkeycar_version"
+
+invoice_title
+--WebKitFormBoundary
+Content-Disposition: form-data; name="tub_archive_file"; filename="file.tar.gz"
+Content-Type: application/gzip
+
+< ./file.tar.gz
+--WebKitFormBoundary--
+
+
+## it returns array of job json, then dkconsole.donwload_model uses curl to fetch them
+## 'uuid'
+## 'status'
+## 'model_url'
+## 'model_accuracy_url'
+## 'model_movie_url'
+POST https://localhost:8001/train/refresh_job_statuses
+Content-Type: application/json
+
+{"job_uuids": job_uuids}
+
+#
+# dkconsole
+#
+## job counts only
+POST https://localhost:8000/tain/refresh_job_status
+
+## jobs
+GET https://localhost:8000/train
+
+## submit_job to a training server (HQ)
+POST https://localhost:8000/train/submit_jop
+Content-Type: application/json
+
+{"tub_paths":[path1, path2], "id_token":id}
+
+## download model using curl in train/services.py
+POST https://localhost:8000/train/download_model
+Content-Type: application/json
+
+{"job_ids":job_uuids}
+
+

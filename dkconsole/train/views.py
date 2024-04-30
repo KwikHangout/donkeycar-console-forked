@@ -4,17 +4,19 @@ from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 
+
 from dkconsole.train.models import Job
 from dkconsole.util import *
 from .serializers import JobSerializer
 from .serializers import SubmitJobSerializer
 from .services import TrainService
+from .models import Job, JobStatus
 
 logger = logging.getLogger(__name__)
 
+from uuid import uuid4
 
 # Create your views here.
-
 
 @api_view(['GET'])
 def index(request):
@@ -51,6 +53,46 @@ def submit_job(request):
     except Exception as e:
         logger.error(e)
         return Response(status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def submit_job_handler(request):
+    try:
+        print("--- submit_job_handler -----")
+        print(request.data)
+        myconfig_file = request.data.get('myconfig_file')
+        tub_archive_file = request.data.get('tub_archive_file')
+        device_id = request.data['device_id']
+        hostname = request.data['hostname']
+
+        if myconfig_file:
+          job_uuid = str(uuid4())
+          myfile = request.FILES['myconfig_file']
+          TrainService.save_for_training(myfile, device_id, hostname, job_uuid)
+        elif tub_archive_file:
+          job_uuid = request.data['job_id']
+          # TrainService.get_train_uuid(device_id, hostname)
+          myfile = request.FILES['tub_archive_file']
+          myfile = TrainService.save_for_training(myfile)
+          TrainService.extract_for_training(myfile, device_id, hostname)
+
+        return Response({"success": True, "job_uuid":job_uuid})
+
+    except Exception as e:
+        logger.error(e)
+        return Response(status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['POST'])
+def refresh_job_statuses(request):
+    global dummy_counter
+    try:
+        print(request.data)
+        job_id = request.data['job_id']
+        return_value = TrainService.get_statuses(job_id)
+        return Response(return_value)
+    except Exception as e:
+        logger.error(e)
+        return Response(status=status.HTTP_400_BAD_REQUEST)
+
 
 
 @api_view(['POST'])
